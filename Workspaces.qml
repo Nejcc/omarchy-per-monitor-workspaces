@@ -160,7 +160,7 @@ BarWidget {
     publishDefer.restart()
     truthDefer.restart()
     root.reloadStaleLua()
-    root.screenArrived()
+    adoptSettle.restart()
   }
 
   Timer { id: publishDefer; interval: 800; onTriggered: root.publishCount() }
@@ -194,10 +194,6 @@ BarWidget {
 
   function guestOrigin(name) {
     return Memory.guestOrigin(name)
-  }
-
-  function matchesSlot(name, slot) {
-    return root.prefix !== "" && root.baseName(name) === root.slotName(slot)
   }
 
   // A valid slot number, or 0; see memory.js.
@@ -688,16 +684,15 @@ BarWidget {
 
   // -------------------------------------------------------------- adoption
   //
-  // A screen that appears lands on whatever workspace Hyprland hands it, which
-  // is a global numbered one rather than anything in this screen's set. A dock
-  // can also put the same panel on a different connector than last time, and
-  // Hyprland restores workspaces per connector rather than per panel, so the
-  // two screens end up showing each other's. Both read the same way from here:
-  // a screen showing something outside its own set.
+  // A dock can put the same panel on a different connector than last time,
+  // and Hyprland restores workspaces per connector rather than per panel, so
+  // a returning screen's workspaces can be anywhere: still parked on another
+  // screen, or taken in there as guests. These bring them home. What each
+  // screen then shows, and where focus goes, is the memory section's job.
   //
   // This lives in the widget because Quickshell rides Hyprland's IPC socket,
   // which announces a returning screen reliably. One instance per screen, each
-  // minding its own, so there is nothing to coordinate.
+  // minding its own workspaces, so there is nothing to coordinate here.
 
   // Slots promised earlier in this same settle tick. reclaimGuests() and
   // absorb() both hand out slots on this screen from one unrefreshed snapshot,
@@ -711,25 +706,6 @@ BarWidget {
     if (!root.monitor) return ""
     var name = root.activeByMonitor[String(root.monitor.name)]
     return name === undefined ? "" : name
-  }
-
-  // A guest whose trailer names this screen's block counts too: it is one of
-  // this screen's own on its way home, still under the name of the screen that
-  // hosted it. Hyprland hands a returning screen back the workspace it was
-  // showing, and reclaimGuests renames it in the same settle, but adopt()
-  // reads the snapshot from before that rename; not counting it sent the
-  // screen away from exactly the workspace it came back to.
-  function showsOwnSlot() {
-    var name = root.activeHere()
-    if (name === "") return false
-
-    var origin = root.guestOrigin(name)
-    if (origin && root.myBlock !== 0 && origin.block === root.myBlock) return true
-
-    for (var slot = 1; slot <= root.effectiveCount; slot++) {
-      if (root.matchesSlot(name, slot)) return true
-    }
-    return false
   }
 
   // Every slot of this screen's that is living on another monitor. Hyprland
@@ -770,44 +746,24 @@ BarWidget {
     return false
   }
 
-  // The slot to put it on: the first that already exists, so a workspace parked
-  // elsewhere while this screen was away comes home rather than being stranded.
-  function homeSlot() {
-    for (var slot = 1; slot <= root.effectiveCount; slot++) {
-      var name = root.slotName(slot)
-      if (root.workspaceByName(name) !== null) return name
-    }
-    return root.slotName(1)
-  }
-
-  // Two jobs, and a screen can need either without the other. Its workspaces
-  // are brought home whatever it is showing -- coming back on one of its own
-  // slots is the common case, and used to mean the rest were left where they
-  // were parked. Focus only moves when this screen itself has just appeared
-  // and is showing something that is not its own; a parked workspace someone
-  // deliberately cycled to is left alone. Another screen coming or going is
-  // no reason to move focus here: unplug the focused screen and Hyprland
-  // shows its workspace on this one, which absorb() is about to take in as a
-  // slot, not something to send the user away from.
+  // Every slot of this screen's living on another screen comes home, whatever
+  // this screen is showing: a screen comes back to find its workspaces
+  // scattered, not just the one it lands on. Where focus goes afterwards is
+  // the fix-up's business; see the memory section.
   function adopt() {
     if (!root.monitor || root.prefix === "") return
 
     var stranded = root.strandedSlots()
-    var settled = !root.arrived || root.showsOwnSlot()
-    if (stranded.length === 0 && settled) return
+    if (stranded.length === 0) return
 
-    // One snippet, so the whole thing is atomic. Stranded workspaces are
-    // carried over first -- focusing one would send us to where it is rather
-    // than bring it where it belongs -- and a move relocates without
-    // displaying, so the focus still has to follow.
+    // One snippet, so the whole thing is atomic. A move relocates without
+    // displaying, and focus is handed back to where it was.
     var body = ""
     for (var i = 0; i < stranded.length; i++) {
       body += "hl.dispatch(hl.dsp.workspace.move({ workspace = "
         + root.quoteLua("name:" + stranded[i])
         + ", monitor = " + root.quoteLua(root.monitor.name) + " })); "
     }
-    if (!settled) body += root.focusHereLua(root.homeSlot())
-
     root.runLua(root.withOriginLua(body))
   }
 
@@ -955,26 +911,17 @@ BarWidget {
       root.reclaimGuests()
       root.adopt()
       root.absorb()
-      root.arrived = false
       // The fix-up waits for this settle's work to show; see fixup().
       if (root.memoryFrozen) restoreSettle.restart()
     }
-  }
-
-  // Whether this bar's own screen appeared since the last settle; see adopt().
-  property bool arrived: false
-
-  function screenArrived() {
-    root.arrived = true
-    adoptSettle.restart()
   }
 
   // Two facts, one action. `prefix` changes when the panel behind this bar
   // changes -- a connector swap, or this bar being new. `monitor` changes when
   // the screen itself is replaced, which is what a reconnect on the same
   // connector with the same description looks like: same name, new object.
-  onPrefixChanged: root.screenArrived()
-  onMonitorChanged: root.screenArrived()
+  onPrefixChanged: adoptSettle.restart()
+  onMonitorChanged: adoptSettle.restart()
   onBlocksChanged: adoptSettle.restart()
 
   // ----------------------------------------------------------------- memory
@@ -1055,7 +1002,14 @@ BarWidget {
     if (root.memoryPath !== "") memoryFile.setText(text)
   }
 
-  // Once a hotplug has settled, lets the memory take what you do again.
+  // Once a hotplug has settled: every screen onto what the memory says, then
+  // focus onto the workspace you were on. memory.js picks the targets; see
+  // plan() there.
+  //
+  // It waits for the settle's own work to show -- the guests taken in, sent
+  // home, brought back -- since a plan made before that would name workspaces
+  // that are about to be renamed. A workspace that never moves cannot hold
+  // this up for good: after ten waits it goes ahead.
   Timer {
     id: restoreSettle
     interval: 400
@@ -1064,9 +1018,50 @@ BarWidget {
 
   function fixup() {
     if (!root.memoryFrozen || root.fixupDone) return
+    // Only the leader acts; the rest have nothing to wait for.
+    if (!root.isLeader()) {
+      root.fixupDone = true
+      return
+    }
+    if (!root.memoryLoaded || !root.blocksLoaded) {
+      restoreSettle.restart()
+      return
+    }
+    if (!Memory.ready(root.snapshot, root.blocks) && root.fixupWaits < 10) {
+      root.fixupWaits++
+      truthDefer.restart()
+      restoreSettle.restart()
+      return
+    }
+
+    var plan = Memory.plan(root.memory, root.snapshot, root.blocks)
     root.fixupDone = true
-    // The memory thaws on the next snapshot of the same screens.
+    if (!plan.idle) root.runLua(root.fixupLua(plan))
+    // The memory thaws on the next snapshot of the same screens, and a fix-up
+    // with nothing to do brings no events of its own to cause one.
     truthDefer.restart()
+  }
+
+  // The fix-up as one snippet, so the order holds: every screen onto its
+  // target, then focus last -- onto the remembered workspace, or back where
+  // it was when there is none. A slot that has to be created goes through the
+  // Lua half's selector, so it gets its proper id, as a click on its dot does.
+  function fixupLua(plan) {
+    var body = "local origin = hl.get_active_monitor(); "
+    for (var i = 0; i < plan.moves.length; i++) {
+      var move = plan.moves[i]
+      body += "hl.dispatch(hl.dsp.focus({ monitor = " + root.quoteLua(move.monitor) + " })); "
+        + "hl.dispatch(hl.dsp.focus({ workspace = "
+        + (move.exists ? root.quoteLua("name:" + move.workspace) : root.selectorLua(move.workspace))
+        + " })); "
+    }
+    if (plan.focus) {
+      body += "hl.dispatch(hl.dsp.focus({ monitor = " + root.quoteLua(plan.focus.monitor) + " })); "
+        + "hl.dispatch(hl.dsp.focus({ workspace = " + root.quoteLua("name:" + plan.focus.workspace) + " }));"
+    } else {
+      body += "if origin then hl.dispatch(hl.dsp.focus({ monitor = origin.name })) end"
+    }
+    return body
   }
 
   // ----------------------------------------------------------------- layout
