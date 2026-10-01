@@ -19,7 +19,13 @@ TestCase {
   }
 
   function space(name, monitor) {
-    return { name: name, monitor: monitor }
+    return { name: name, monitor: monitor, windows: 1 }
+  }
+
+  // What Hyprland hands a screen with nothing else to show: a bare-numbered
+  // workspace, new and so empty.
+  function placeholder(name, monitor) {
+    return { name: name, monitor: monitor, windows: 0 }
   }
 
   function snapshot(monitors, workspaces) {
@@ -207,10 +213,10 @@ TestCase {
   }
 
   function test_record_leaves_focus_alone_on_a_placeholder() {
-    var placeholder = snapshot(
+    var onPlaceholder = snapshot(
       [screen("eDP-1", "BOE", "1", true)],
-      [space("1", "eDP-1"), space("BOE:3", "eDP-1")])
-    var next = Memory.record(dockedMemory(), placeholder, blocks, session)
+      [placeholder("1", "eDP-1"), space("BOE:3", "eDP-1")])
+    var next = Memory.record(dockedMemory(), onPlaceholder, blocks, session)
     compare(next.focus, [2, 2])
     compare(next.screens["1"], { shown: [1, 3], own: 3 })
   }
@@ -256,7 +262,7 @@ TestCase {
 
   function test_ready_ignores_what_nothing_will_move() {
     var odd = docked()
-    odd.workspaces.push(space("1", "eDP-1"))
+    odd.workspaces.push(placeholder("1", "eDP-1"))
     odd.workspaces.push(space("special:scratchpad", "DP-6"))
     odd.workspaces.push(space("Gone:3", "eDP-1"))
     verify(Memory.ready(odd, blocks))
@@ -319,7 +325,7 @@ TestCase {
       [screen("eDP-1", "BOE", "BOE:2", true, 0),
        screen("DP-6", "U27", "U27:1", false, 1600),
        screen("DP-1", "P27", "1", false, 4160)],
-      [space("BOE:2", "eDP-1"), space("BOE:3", "eDP-1"), space("1", "DP-1"),
+      [space("BOE:2", "eDP-1"), space("BOE:3", "eDP-1"), placeholder("1", "DP-1"),
        space("U27:1", "DP-6"), space("U27:2", "DP-6"), space("P27:1", "DP-1")])
     compare(Memory.plan(before, after, blocks), {
       moves: [{ monitor: "DP-1", workspace: "P27:1", exists: true },
@@ -339,7 +345,7 @@ TestCase {
     })
     var after = snapshot(
       [screen("eDP-1", "BOE", "1", false, 0), screen("DP-6", "U27", "U27:2", true, 1600)],
-      [space("1", "eDP-1"), space("U27:1", "DP-6"), space("U27:2", "DP-6")])
+      [placeholder("1", "eDP-1"), space("U27:1", "DP-6"), space("U27:2", "DP-6")])
     compare(Memory.plan(before, after, blocks), {
       moves: [{ monitor: "eDP-1", workspace: "BOE:1", exists: false }],
       focus: { monitor: "DP-6", workspace: "U27:2" },
@@ -378,7 +384,7 @@ TestCase {
   function test_plan_with_no_memory_keeps_screens_where_they_are() {
     var first = docked()
     first.monitors[2].active = "3"
-    first.workspaces.push(space("3", "DP-4"))
+    first.workspaces.push(placeholder("3", "DP-4"))
     first.workspaces.splice(4, 1)
     compare(Memory.plan(Memory.emptyMemory(session), first, blocks), {
       moves: [{ monitor: "DP-4", workspace: "P27:1", exists: false }],
@@ -390,7 +396,7 @@ TestCase {
   function test_plan_gives_a_screen_with_no_block_its_slot_1() {
     var fresh = docked()
     fresh.monitors.push(screen("HDMI-A-1", "New Panel", "4", false, 5760))
-    fresh.workspaces.push(space("4", "HDMI-A-1"))
+    fresh.workspaces.push(placeholder("4", "HDMI-A-1"))
     compare(Memory.plan(dockedMemory(), fresh, blocks).moves,
       [{ monitor: "HDMI-A-1", workspace: "New Panel:1", exists: false }])
   }
@@ -402,9 +408,49 @@ TestCase {
        screen("DP-1", "Twin", "Twin@DP-1:2", false, 1600),
        screen("DP-2", "Twin", "2", false, 3200)],
       [space("BOE:1", "eDP-1"), space("Twin@DP-1:2", "DP-1"), space("Twin@DP-2:1", "DP-2"),
-       space("2", "DP-2")])
+       placeholder("2", "DP-2")])
     compare(Memory.plan(memory([1, 1], {}), twins, twinBlocks).moves,
       [{ monitor: "DP-2", workspace: "Twin@DP-2:1", exists: true }])
+  }
+
+  // --------------------------------------------- outside the scheme, guests
+
+  // A workspace this plugin did not name -- a window rule's "9", a script's --
+  // that you are using. Not a placeholder: it holds windows.
+  function onNine() {
+    var nine = docked()
+    nine.monitors[1].active = "9"
+    nine.workspaces.push(space("9", "DP-6"))
+    return nine
+  }
+
+  function test_record_forgets_focus_on_a_workspace_outside_the_scheme() {
+    var next = Memory.record(dockedMemory(), onNine(), blocks, session)
+    compare(next.focus, null)
+    compare(next.screens["2"], { shown: [2, 2], own: 2 })
+  }
+
+  function test_plan_restart_on_a_workspace_outside_the_scheme_moves_nothing() {
+    var recorded = memory(null, dockedMemory().screens)
+    compare(Memory.plan(recorded, onNine(), blocks), { moves: [], focus: null, idle: true })
+  }
+
+  function test_plan_keeps_a_workspace_outside_the_scheme_through_a_hotplug() {
+    var after = snapshot(
+      [screen("eDP-1", "BOE", "9", false, 0), screen("DP-6", "U27", "U27:2", true, 1600)],
+      [space("BOE:3", "eDP-1"), space("9", "eDP-1"), space("U27:1", "DP-6"), space("U27:2", "DP-6")])
+    compare(Memory.plan(dockedMemory(), after, blocks), {
+      moves: [], focus: { monitor: "DP-6", workspace: "U27:2" }, idle: true
+    })
+  }
+
+  // Nothing remembered, undocked on a guest: the guest is a slot of this
+  // screen as much as its own are, and it stays.
+  function test_plan_with_no_memory_keeps_a_screen_on_its_guest() {
+    var undocked = snapshot(
+      [screen("eDP-1", "BOE", "BOE:5#2.2", true)],
+      [space("BOE:2", "eDP-1"), space("BOE:3", "eDP-1"), space("BOE:5#2.2", "eDP-1")])
+    compare(Memory.plan(Memory.emptyMemory(session), undocked, blocks), { moves: [], focus: null, idle: true })
   }
 
   // ---------------------------------------------------------------- batch

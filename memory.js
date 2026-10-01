@@ -83,6 +83,20 @@ function sameHome(left, right) {
   return !!left && !!right && left[0] === right[0] && left[1] === right[1]
 }
 
+// A workspace this plugin did not name -- a window rule's "9", a script's, one
+// a gesture made -- that you are using. Hyprland's placeholders, the
+// bare-numbered workspaces it hands a screen with nothing else to show, are
+// always new and so empty; one that holds windows is yours, and stays where
+// it is.
+function foreignInUse(name, snapshot, blocks) {
+  var text = String(name)
+  if (text === "" || text.indexOf("special:") === 0 || homeOf(text, blocks)) return false
+  for (var i = 0; i < snapshot.workspaces.length; i++) {
+    if (snapshot.workspaces[i].name === text) return Number(snapshot.workspaces[i].windows) > 0
+  }
+  return false
+}
+
 // ----------------------------------------------------------------- layout
 
 // Which screens are connected, where, and how big. Two snapshots with the same
@@ -187,10 +201,12 @@ function serialize(memory) {
 // width, height }], workspaces: [{ name, monitor }] }, `active` being the name
 // of the workspace the screen shows.
 //
-// `focus` becomes the home of the focused screen's workspace, and is left as
-// it was when that is not one of ours. Each connected screen with a block gets
-// `shown`, and `own` when it shows one of its own native slots. A screen that
-// is not connected keeps its entry: that is what a replug restores from.
+// `focus` becomes the home of the focused screen's workspace. On a workspace
+// outside the scheme that you are using it is cleared -- that focus is yours,
+// and nothing is to send you away from it -- and on a placeholder it is left
+// as it was. Each connected screen with a block gets `shown`, and `own` when
+// it shows one of its own native slots. A screen that is not connected keeps
+// its entry: that is what a replug restores from.
 function record(memory, snapshot, blocks, session) {
   var next = memory && memory.session === String(session)
     ? parse(serialize(memory), session) : emptyMemory(session)
@@ -199,6 +215,7 @@ function record(memory, snapshot, blocks, session) {
     var monitor = snapshot.monitors[i]
     var home = homeOf(monitor.active, blocks)
     if (monitor.focused && home) next.focus = home
+    else if (monitor.focused && foreignInUse(monitor.active, snapshot, blocks)) next.focus = null
 
     var block = Number(blocks[monitorKey(monitor, snapshot.monitors)])
     if (!(block > 0)) continue
@@ -269,19 +286,24 @@ function ready(snapshot, blocks) {
 // The screen's target: the first of
 //
 //   1. the workspace with home `focus`, if it is on this screen;
-//   2. the workspace with home `shown`, if it is on this screen;
-//   3. its slot `own`, if that exists here;
-//   4. what it shows now, if that is one of its own native slots;
-//   5. its lowest own native slot that exists here;
-//   6. its slot 1, created if missing.
+//   2. what it shows now, if that is a workspace outside the scheme that you
+//      are using (see foreignInUse);
+//   3. the workspace with home `shown`, if it is on this screen;
+//   4. its slot `own`, if that exists here;
+//   5. what it shows now, if that is one of its slots, a guest included;
+//   6. its lowest own native slot that exists here;
+//   7. its slot 1, created if missing.
 //
-// A placeholder has no home and is not a slot, so it never qualifies.
-// Rule 4 keeps a screen where it is when nothing is remembered for it -- a
-// first start, a file from another session -- rather than moving it to its
-// lowest slot.
+// A placeholder has no home, is not a slot and holds nothing, so it never
+// qualifies. Rule 5 keeps a screen where it is when nothing is remembered for
+// it -- a first start, a file from another session -- rather than moving it
+// to its lowest slot.
 function targetFor(monitor, key, entry, focused, snapshot, blocks) {
   if (focused && focused.monitor === monitor.name)
     return { monitor: monitor.name, workspace: focused.name, exists: true }
+
+  if (foreignInUse(monitor.active, snapshot, blocks))
+    return { monitor: monitor.name, workspace: monitor.active, exists: true }
 
   var shown = locate(entry.shown, snapshot, blocks)
   if (shown && shown.monitor === monitor.name)
@@ -301,7 +323,7 @@ function targetFor(monitor, key, entry, focused, snapshot, blocks) {
   if (entry.own && own[entry.own] !== undefined)
     return { monitor: monitor.name, workspace: own[entry.own], exists: true }
   var current = splitSlot(monitor.active)
-  if (current && current.key === key && !guestOrigin(monitor.active) && own[current.slot] !== undefined)
+  if (current && current.key === key)
     return { monitor: monitor.name, workspace: monitor.active, exists: true }
   if (lowest > 0) return { monitor: monitor.name, workspace: own[lowest], exists: true }
   return { monitor: monitor.name, workspace: key + ":1", exists: false }
