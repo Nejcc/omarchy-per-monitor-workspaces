@@ -220,4 +220,190 @@ TestCase {
     compare(next.session, "session-b")
     compare(next.focus, [2, 2])
   }
+
+  // ------------------------------------------------------- locate, ready
+
+  function test_locate_prefers_the_one_on_screen_when_two_share_a_home() {
+    var both = snapshot(
+      [screen("eDP-1", "BOE", "BOE:7#2.2", true)],
+      [space("BOE:5#2.2", "eDP-1"), space("BOE:7#2.2", "eDP-1")])
+    compare(Memory.locate([2, 2], both, blocks).name, "BOE:7#2.2")
+    compare(Memory.locate([2, 9], both, blocks), null)
+    compare(Memory.locate(null, both, blocks), null)
+  }
+
+  function test_ready_waits_for_absorb() {
+    var parked = snapshot([screen("eDP-1", "BOE", "BOE:3", true)],
+      [space("BOE:3", "eDP-1"), space("U27:2", "eDP-1")])
+    verify(!Memory.ready(parked, blocks))
+
+    var absorbed = snapshot([screen("eDP-1", "BOE", "BOE:3", true)],
+      [space("BOE:3", "eDP-1"), space("BOE:4#2.2", "eDP-1")])
+    verify(Memory.ready(absorbed, blocks))
+  }
+
+  function test_ready_waits_for_reclaim() {
+    var returning = docked()
+    returning.workspaces.push(space("BOE:5#2.3", "DP-6"))
+    verify(!Memory.ready(returning, blocks))
+  }
+
+  function test_ready_waits_for_adopt() {
+    var stranded = docked()
+    stranded.workspaces.push(space("U27:3", "eDP-1"))
+    verify(!Memory.ready(stranded, blocks))
+  }
+
+  function test_ready_ignores_what_nothing_will_move() {
+    var odd = docked()
+    odd.workspaces.push(space("1", "eDP-1"))
+    odd.workspaces.push(space("special:scratchpad", "DP-6"))
+    odd.workspaces.push(space("Gone:3", "eDP-1"))
+    verify(Memory.ready(odd, blocks))
+  }
+
+  // ----------------------------------------------------------------- plan
+
+  function test_plan_is_idle_when_everything_is_in_place() {
+    compare(Memory.plan(dockedMemory(), docked(), blocks), {
+      moves: [], focus: { monitor: "DP-6", workspace: "U27:2" }, idle: true
+    })
+  }
+
+  // The dock drops the P2715Q first, and Hyprland moves focus to the laptop.
+  function test_plan_dock_unplug_first_drop_puts_focus_back() {
+    var after = snapshot(
+      [screen("eDP-1", "BOE", "BOE:3", true, 0), screen("DP-6", "U27", "U27:2", false, 1600)],
+      [space("BOE:2", "eDP-1"), space("BOE:3", "eDP-1"), space("BOE:4#3.1", "eDP-1"),
+       space("U27:1", "DP-6"), space("U27:2", "DP-6")])
+    compare(Memory.plan(dockedMemory(), after, blocks), {
+      moves: [], focus: { monitor: "DP-6", workspace: "U27:2" }, idle: false
+    })
+  }
+
+  // Then the U2725QE goes too, and its slot 2 is taken in as laptop slot 6.
+  function test_plan_dock_unplug_second_drop_follows_the_workspace() {
+    var after = snapshot(
+      [screen("eDP-1", "BOE", "BOE:3", true)],
+      [space("BOE:2", "eDP-1"), space("BOE:3", "eDP-1"), space("BOE:4#3.1", "eDP-1"),
+       space("BOE:5#2.1", "eDP-1"), space("BOE:6#2.2", "eDP-1")])
+    compare(Memory.plan(dockedMemory(), after, blocks), {
+      moves: [{ monitor: "eDP-1", workspace: "BOE:6#2.2", exists: true }],
+      focus: { monitor: "eDP-1", workspace: "BOE:6#2.2" },
+      idle: false
+    })
+  }
+
+  function test_plan_single_unplug_of_the_focused_screen() {
+    var before = memory([3, 1], dockedMemory().screens)
+    var after = snapshot(
+      [screen("eDP-1", "BOE", "BOE:3", true, 0), screen("DP-6", "U27", "U27:2", false, 1600)],
+      [space("BOE:2", "eDP-1"), space("BOE:3", "eDP-1"), space("BOE:4#3.1", "eDP-1"),
+       space("U27:1", "DP-6"), space("U27:2", "DP-6")])
+    compare(Memory.plan(before, after, blocks), {
+      moves: [{ monitor: "eDP-1", workspace: "BOE:4#3.1", exists: true }],
+      focus: { monitor: "eDP-1", workspace: "BOE:4#3.1" },
+      idle: false
+    })
+  }
+
+  // Undocked on the U2725QE's slot 2, which it was not showing when it left:
+  // focus wins over its remembered slot 1, and the laptop goes back to its 3.
+  function test_plan_replug_focus_wins() {
+    var before = memory([2, 2], {
+      "1": { shown: [2, 2], own: 3 },
+      "2": { shown: [2, 1], own: 1 },
+      "3": { shown: [3, 1], own: 1 }
+    })
+    var after = snapshot(
+      [screen("eDP-1", "BOE", "BOE:2", true, 0),
+       screen("DP-6", "U27", "U27:1", false, 1600),
+       screen("DP-1", "P27", "1", false, 4160)],
+      [space("BOE:2", "eDP-1"), space("BOE:3", "eDP-1"), space("1", "DP-1"),
+       space("U27:1", "DP-6"), space("U27:2", "DP-6"), space("P27:1", "DP-1")])
+    compare(Memory.plan(before, after, blocks), {
+      moves: [{ monitor: "DP-1", workspace: "P27:1", exists: true },
+              { monitor: "DP-6", workspace: "U27:2", exists: true },
+              { monitor: "eDP-1", workspace: "BOE:3", exists: true }],
+      focus: { monitor: "DP-6", workspace: "U27:2" },
+      idle: false
+    })
+  }
+
+  // a2: the laptop's own slots were emptied while undocked, and its last
+  // guest has gone home, leaving Hyprland's placeholder.
+  function test_plan_replaces_a_placeholder() {
+    var before = memory([2, 2], {
+      "1": { shown: [2, 2], own: 3 },
+      "2": { shown: [2, 2], own: 2 }
+    })
+    var after = snapshot(
+      [screen("eDP-1", "BOE", "1", false, 0), screen("DP-6", "U27", "U27:2", true, 1600)],
+      [space("1", "eDP-1"), space("U27:1", "DP-6"), space("U27:2", "DP-6")])
+    compare(Memory.plan(before, after, blocks), {
+      moves: [{ monitor: "eDP-1", workspace: "BOE:1", exists: false }],
+      focus: { monitor: "DP-6", workspace: "U27:2" },
+      idle: false
+    })
+  }
+
+  function test_plan_keeps_a_guest_on_a_screen_the_hotplug_left_alone() {
+    var before = memory([3, 1], {
+      "1": { shown: [2, 2], own: 3 },
+      "3": { shown: [3, 1], own: 1 }
+    })
+    var after = snapshot(
+      [screen("eDP-1", "BOE", "BOE:5#2.2", false, 0), screen("DP-4", "P27", "P27:1", true, 1600)],
+      [space("BOE:3", "eDP-1"), space("BOE:5#2.2", "eDP-1"), space("P27:1", "DP-4")])
+    compare(Memory.plan(before, after, blocks), {
+      moves: [], focus: { monitor: "DP-4", workspace: "P27:1" }, idle: true
+    })
+  }
+
+  function test_plan_lets_focus_be_when_its_workspace_has_closed() {
+    var before = memory([2, 5], dockedMemory().screens)
+    compare(Memory.plan(before, docked(), blocks), { moves: [], focus: null, idle: true })
+  }
+
+  // b: the guest was sent home to slot 3 because its slot 2 was taken. Its
+  // home no longer leads to it; the one now holding slot 2 is focused instead.
+  function test_plan_after_nearest_free_focuses_the_slot_holder() {
+    var after = docked()
+    after.workspaces.push(space("U27:3", "DP-6"))
+    compare(Memory.plan(dockedMemory(), after, blocks).focus, { monitor: "DP-6", workspace: "U27:2" })
+  }
+
+  // Nothing remembered -- a first start, or a file from another session: no
+  // screen is moved off one of its own slots, and a placeholder gets slot 1.
+  function test_plan_with_no_memory_keeps_screens_where_they_are() {
+    var first = docked()
+    first.monitors[2].active = "3"
+    first.workspaces.push(space("3", "DP-4"))
+    first.workspaces.splice(4, 1)
+    compare(Memory.plan(Memory.emptyMemory(session), first, blocks), {
+      moves: [{ monitor: "DP-4", workspace: "P27:1", exists: false }],
+      focus: null,
+      idle: false
+    })
+  }
+
+  function test_plan_gives_a_screen_with_no_block_its_slot_1() {
+    var fresh = docked()
+    fresh.monitors.push(screen("HDMI-A-1", "New Panel", "4", false, 5760))
+    fresh.workspaces.push(space("4", "HDMI-A-1"))
+    compare(Memory.plan(dockedMemory(), fresh, blocks).moves,
+      [{ monitor: "HDMI-A-1", workspace: "New Panel:1", exists: false }])
+  }
+
+  function test_plan_keys_twin_panels_by_connector() {
+    var twinBlocks = { "BOE": 1, "Twin@DP-1": 4, "Twin@DP-2": 5 }
+    var twins = snapshot(
+      [screen("eDP-1", "BOE", "BOE:1", true, 0),
+       screen("DP-1", "Twin", "Twin@DP-1:2", false, 1600),
+       screen("DP-2", "Twin", "2", false, 3200)],
+      [space("BOE:1", "eDP-1"), space("Twin@DP-1:2", "DP-1"), space("Twin@DP-2:1", "DP-2"),
+       space("2", "DP-2")])
+    compare(Memory.plan(memory([1, 1], {}), twins, twinBlocks).moves,
+      [{ monitor: "DP-2", workspace: "Twin@DP-2:1", exists: true }])
+  }
 }

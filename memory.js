@@ -209,3 +209,137 @@ function record(memory, snapshot, blocks, session) {
   }
   return next
 }
+
+// ---------------------------------------------------------------- fix-up
+
+// The workspace with this home, or null. Two can share one -- a guest whose
+// slot was taken while it was away, waiting to go home -- and then one a screen
+// is showing wins, so a fix-up never trades one for the other.
+function locate(home, snapshot, blocks) {
+  if (!home) return null
+  var showing = {}
+  for (var m = 0; m < snapshot.monitors.length; m++) showing[snapshot.monitors[m].active] = true
+
+  var found = null
+  for (var i = 0; i < snapshot.workspaces.length; i++) {
+    var workspace = snapshot.workspaces[i]
+    if (!sameHome(homeOf(workspace.name, blocks), home)) continue
+    if (showing[workspace.name] === true) return workspace
+    if (!found) found = workspace
+  }
+  return found
+}
+
+// Whether the settle's work shows in this snapshot: nothing named for a
+// disconnected screen still waiting to be taken in, no guest of a connected
+// screen still waiting to go home, and no slot of a connected screen still
+// living on another one. Until then, a plan would name workspaces that are
+// about to be renamed.
+function ready(snapshot, blocks) {
+  var screenOfKey = {}
+  var connectedBlocks = {}
+  for (var m = 0; m < snapshot.monitors.length; m++) {
+    var key = monitorKey(snapshot.monitors[m], snapshot.monitors)
+    screenOfKey[key] = snapshot.monitors[m].name
+    if (Number(blocks[key]) > 0) connectedBlocks[Number(blocks[key])] = true
+  }
+
+  for (var i = 0; i < snapshot.workspaces.length; i++) {
+    var workspace = snapshot.workspaces[i]
+    if (String(workspace.name).indexOf("special:") === 0) continue
+    var parts = splitSlot(workspace.name)
+    if (!parts) continue
+    var origin = guestOrigin(workspace.name)
+    var screen = Object.prototype.hasOwnProperty.call(screenOfKey, parts.key) ? screenOfKey[parts.key] : null
+
+    // Named for a screen that is not here: absorb() takes it in, if it can
+    // tell where it came from.
+    if (screen === null) {
+      if (origin || Number(blocks[parts.key]) > 0) return false
+      continue
+    }
+    // A guest of a screen that is back: reclaimGuests() sends it home.
+    if (origin && connectedBlocks[origin.block] === true) return false
+    // A slot of a screen that is here, living elsewhere: adopt() brings it back.
+    if (workspace.monitor !== screen) return false
+  }
+  return true
+}
+
+// The screen's target: the first of
+//
+//   1. the workspace with home `focus`, if it is on this screen;
+//   2. the workspace with home `shown`, if it is on this screen;
+//   3. its slot `own`, if that exists here;
+//   4. what it shows now, if that is one of its own native slots;
+//   5. its lowest own native slot that exists here;
+//   6. its slot 1, created if missing.
+//
+// A placeholder has no home and is not a slot, so it never qualifies.
+// Rule 4 keeps a screen where it is when nothing is remembered for it -- a
+// first start, a file from another session -- rather than moving it to its
+// lowest slot.
+function targetFor(monitor, key, entry, focused, snapshot, blocks) {
+  if (focused && focused.monitor === monitor.name)
+    return { monitor: monitor.name, workspace: focused.name, exists: true }
+
+  var shown = locate(entry.shown, snapshot, blocks)
+  if (shown && shown.monitor === monitor.name)
+    return { monitor: monitor.name, workspace: shown.name, exists: true }
+
+  var own = {}
+  var lowest = 0
+  for (var i = 0; i < snapshot.workspaces.length; i++) {
+    var workspace = snapshot.workspaces[i]
+    if (workspace.monitor !== monitor.name || guestOrigin(workspace.name)) continue
+    var parts = splitSlot(workspace.name)
+    if (!parts || parts.key !== key) continue
+    own[parts.slot] = workspace.name
+    if (lowest === 0 || parts.slot < lowest) lowest = parts.slot
+  }
+
+  if (entry.own && own[entry.own] !== undefined)
+    return { monitor: monitor.name, workspace: own[entry.own], exists: true }
+  var current = splitSlot(monitor.active)
+  if (current && current.key === key && !guestOrigin(monitor.active) && own[current.slot] !== undefined)
+    return { monitor: monitor.name, workspace: monitor.active, exists: true }
+  if (lowest > 0) return { monitor: monitor.name, workspace: own[lowest], exists: true }
+  return { monitor: monitor.name, workspace: key + ":1", exists: false }
+}
+
+// What the fix-up does, as { moves, focus, idle }:
+//
+// - moves: [{ monitor, workspace, exists }] for each screen not already showing
+//   its target, by connector name. `exists` is false only for a slot 1 that
+//   has to be created.
+// - focus: { monitor, workspace } for the workspace with home `focus`,
+//   wherever it is, or null when there is none -- you closed it, or nothing is
+//   remembered.
+// - idle: true when nothing needs doing at all.
+//
+// A screen with no block yet -- one the Lua half has never handed out ids
+// for -- still gets a target: its own slots by key, or slot 1, whose creation
+// gives it its block.
+function plan(memory, snapshot, blocks) {
+  var focused = locate(memory.focus, snapshot, blocks)
+  var monitors = snapshot.monitors.slice().sort(function(left, right) {
+    return left.name < right.name ? -1 : (left.name > right.name ? 1 : 0)
+  })
+
+  var moves = []
+  var focusedNow = null
+  for (var i = 0; i < monitors.length; i++) {
+    var monitor = monitors[i]
+    if (monitor.focused) focusedNow = monitor
+    var key = monitorKey(monitor, snapshot.monitors)
+    var block = Number(blocks[key])
+    var entry = block > 0 && memory.screens[String(block)] ? memory.screens[String(block)] : {}
+    var target = targetFor(monitor, key, entry, focused, snapshot, blocks)
+    if (target.workspace !== monitor.active) moves.push(target)
+  }
+
+  var focus = focused ? { monitor: focused.monitor, workspace: focused.name } : null
+  var idle = moves.length === 0 && (focus === null
+    || (focusedNow !== null && focusedNow.name === focus.monitor && focusedNow.active === focus.workspace))
+  return { moves: moves, focus: focus, idle: idle }
+}
