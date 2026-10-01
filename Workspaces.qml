@@ -5,6 +5,7 @@ import Quickshell.Hyprland
 import Quickshell.Io
 import qs.Commons
 import qs.Ui
+import "memory.js" as Memory
 
 // Per-monitor workspace indicator. Each bar shows only its own screen's slots,
 // numbered 1..effectiveCount, matching this plugin's hypr/init.lua: that file
@@ -175,53 +176,29 @@ BarWidget {
   // only refilled by a full monitor refresh, so on hotplug it is briefly empty
   // and this would fall back to the connector name — long enough for a click
   // to create a connector-named workspace the keybindings never target.
-  readonly property string prefix: {
-    if (!root.monitor) return ""
-
-    var description = String(root.monitor.description || "")
-    if (description === "") return String(root.monitor.name || "")
-
-    var monitors = Hyprland.monitors.values
-    for (var i = 0; i < monitors.length; i++) {
-      if (monitors[i] !== root.monitor && String(monitors[i].description || "") === description)
-        return description + "@" + String(root.monitor.name || "")
-    }
-
-    return description
-  }
+  readonly property string prefix:
+    root.monitor ? Memory.monitorKey(root.monitor, Hyprland.monitors.values) : ""
 
   function slotName(slot) {
     return root.prefix === "" ? "" : root.prefix + ":" + slot
   }
 
-  // The naming grammar, mirroring hypr/names.lua. The two runtimes cannot
-  // share code, so they share a contract instead -- as they already do for
-  // monitor_key and for <key>:<slot>. If they disagree, the dots and the keys
-  // address different workspaces.
+  // The naming grammar lives in memory.js, which mirrors hypr/names.lua.
   function baseName(name) {
-    return String(name).replace(/#\d+\.\d+$/, "")
+    return Memory.baseName(name)
   }
 
   function guestOrigin(name) {
-    var match = String(name).match(/#(\d+)\.(\d+)$/)
-    return match ? { block: Number(match[1]), slot: Number(match[2]) } : null
+    return Memory.guestOrigin(name)
   }
 
   function matchesSlot(name, slot) {
     return root.prefix !== "" && root.baseName(name) === root.slotName(slot)
   }
 
-  // A valid slot number: a plain positive integer below the id ceiling,
-  // matching names.id's own range. `Number` alone is looser than the Lua
-  // side's `%d+` pattern -- it accepts "+3", "0x10", "1e2", "3.0" and
-  // "Infinity" -- and an unbounded or infinite result here would size
-  // effectiveCount and buildEntries' own loop off a name nothing sane would
-  // produce. Returns 0 for anything that does not qualify.
+  // A valid slot number, or 0; see memory.js.
   function parseSlot(text) {
-    var str = String(text)
-    if (!/^[0-9]+$/.test(str)) return 0
-    var slot = Number(str)
-    return slot > 0 && slot < 100 ? slot : 0
+    return Memory.parseSlot(text)
   }
 
   // The same key the Lua half builds, for any screen rather than just this
@@ -233,15 +210,7 @@ BarWidget {
     for (var i = 0; i < monitors.length; i++) {
       if (String(monitors[i].name) === String(monitorName)) { self = monitors[i]; break }
     }
-    if (!self) return ""
-
-    var description = String(self.description || "")
-    if (description === "") return String(self.name || "")
-    for (var j = 0; j < monitors.length; j++) {
-      if (monitors[j] !== self && String(monitors[j].description || "") === description)
-        return description + "@" + String(self.name || "")
-    }
-    return description
+    return self ? Memory.monitorKey(self, monitors) : ""
   }
 
   // Slot number -> workspace, for the screen with this key. A guest counts as
