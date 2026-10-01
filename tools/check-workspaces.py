@@ -12,6 +12,8 @@ STRIDE = 100
 TRAILER = re.compile(r"#(\d+)\.(\d+)$")
 BLOCKS = os.path.expanduser(
     "~/.local/state/omarchy/mmsbrggr.per-monitor-workspaces.blocks.lua")
+MEMORY = os.path.expanduser(
+    "~/.local/state/omarchy/mmsbrggr.per-monitor-workspaces.memory.json")
 
 
 def hypr(what):
@@ -27,6 +29,15 @@ def blocks():
         if m:
             out[m.group(1)] = int(m.group(2))
     return out
+
+
+def memory():
+    """The widget's hotplug memory, or None when there is none to read."""
+    try:
+        with open(MEMORY, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
 
 
 def monitor_key(mon, mons):
@@ -57,6 +68,19 @@ def main():
     for k, v in sorted(blk.items(), key=lambda kv: kv[1]):
         live = [n for n, kk in key_of.items() if kk == k]
         print(f"  {v}  {k}" + (f"  -> {live[0]}" if live else "  (not attached)"))
+
+    mem = memory()
+    print("\nmemory:")
+    if mem is None:
+        print("  (none)")
+    else:
+        current = mem.get("session") == os.environ.get("HYPRLAND_INSTANCE_SIGNATURE")
+        print("  session " + ("current" if current else "from another session, ignored"))
+        print(f"  focus   {mem.get('focus')}")
+        screens = mem.get("screens") or {}
+        for block in sorted(screens, key=lambda b: int(b) if b.isdigit() else 0):
+            entry = screens[block] or {}
+            print(f"  block {block}: shown {entry.get('shown')}, own {entry.get('own')}")
 
     print("\nworkspaces:")
     problems = []

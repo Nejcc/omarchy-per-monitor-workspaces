@@ -58,6 +58,8 @@ BarWidget {
   // The widget needs it to read and write guest trailers, which carry a block
   // number rather than a key.
   property var blocks: ({})
+  // Read at least once, even if only to find there is no file yet.
+  property bool blocksLoaded: false
 
   FileView {
     id: blocksFile
@@ -73,7 +75,9 @@ BarWidget {
         if (match) map[match[1]] = Number(match[2])
       }
       root.blocks = map
+      root.blocksLoaded = true
     }
+    onLoadFailed: root.blocksLoaded = true
   }
 
   readonly property int myBlock: root.prefix === "" ? 0 : (root.blocks[root.prefix] || 0)
@@ -274,6 +278,9 @@ BarWidget {
   property var workspaces: []
   property var activeByMonitor: ({})
   property string focusedMonitorName: ""
+  // The same read, whole, for the hotplug memory: every screen with where it
+  // is and what it shows, and every workspace. See the memory section.
+  property var snapshot: ({ monitors: [], workspaces: [] })
 
   Process {
     id: truth
@@ -293,11 +300,22 @@ BarWidget {
 
         var active = ({})
         var focused = ""
+        var screens = []
         for (var i = 0; i < monitors.length; i++) {
           var monitor = monitors[i]
           active[String(monitor.name)] =
             monitor.activeWorkspace ? String(monitor.activeWorkspace.name) : ""
           if (monitor.focused) focused = String(monitor.name)
+          screens.push({
+            name: String(monitor.name),
+            description: String(monitor.description || ""),
+            focused: !!monitor.focused,
+            active: active[String(monitor.name)],
+            x: Number(monitor.x) || 0,
+            y: Number(monitor.y) || 0,
+            width: Number(monitor.width) || 0,
+            height: Number(monitor.height) || 0
+          })
         }
 
         var found = []
@@ -312,6 +330,8 @@ BarWidget {
         root.activeByMonitor = active
         root.focusedMonitorName = focused
         root.workspaces = found
+        root.snapshot = { monitors: screens, workspaces: found }
+        root.snapshotTaken()
       }
     }
   }
@@ -338,7 +358,10 @@ BarWidget {
     // above firing for all of them, and adoption reads this snapshot to decide
     // what to bring home.
     "monitoradded": true, "monitoraddedv2": true,
-    "monitorremoved": true, "monitorremovedv2": true
+    "monitorremoved": true, "monitorremovedv2": true,
+    // A monitor-profile daemon such as hyprmoncfg moves screens by reloading
+    // the config, and nothing else announces a screen that has moved.
+    "configreloaded": true
   })
 
   Connections {
@@ -933,6 +956,8 @@ BarWidget {
       root.adopt()
       root.absorb()
       root.arrived = false
+      // The fix-up waits for this settle's work to show; see fixup().
+      if (root.memoryFrozen) restoreSettle.restart()
     }
   }
 
@@ -951,6 +976,98 @@ BarWidget {
   onPrefixChanged: root.screenArrived()
   onMonitorChanged: root.screenArrived()
   onBlocksChanged: adoptSettle.restart()
+
+  // ----------------------------------------------------------------- memory
+  //
+  // What was focused, and what each screen showed, so a hotplug can put it
+  // all back. Hyprland moves focus to the first remaining screen on every
+  // disconnect, before it says a screen has gone, and hands a returning
+  // screen whatever it likes. memory.js decides what to remember and what to
+  // restore; this is the plumbing.
+  //
+  // In a file rather than in the bar: a monitor-profile daemon reloads the
+  // config after a hotplug, the shell then rebuilds every bar, and a bar's
+  // memory would go with it -- just when it is needed.
+  readonly property string memoryPath:
+    stateDir ? stateDir + "/" + root.moduleName + ".memory.json" : ""
+  readonly property string session: Quickshell.env("HYPRLAND_INSTANCE_SIGNATURE") || ""
+
+  property var memory: Memory.emptyMemory(root.session)
+  property bool memoryLoaded: root.memoryPath === ""
+
+  FileView {
+    id: memoryFile
+    path: root.memoryPath
+    atomicWrites: true
+    watchChanges: true
+    printErrors: false
+    onFileChanged: reload()
+    onLoaded: {
+      root.memory = Memory.parse(text(), root.session)
+      root.memoryLoaded = true
+    }
+    onLoadFailed: {
+      root.memory = Memory.emptyMemory(root.session)
+      root.memoryLoaded = true
+    }
+  }
+
+  // The memory only takes what you did. A snapshot whose screens differ from
+  // the previous one's -- one came or went, or moved -- shows where Hyprland
+  // put focus, so it freezes the memory instead, until the fix-up has run and
+  // a snapshot of the same screens has followed; see freezeStep() in
+  // memory.js. A bar starts frozen: its first snapshot has nothing to compare
+  // with.
+  property string lastLayout: ""
+  property bool memoryFrozen: true
+  property bool fixupDone: false
+  property int fixupWaits: 0
+
+  function snapshotTaken() {
+    var step = Memory.freezeStep({
+      layout: root.lastLayout, frozen: root.memoryFrozen,
+      fixupDone: root.fixupDone, waits: root.fixupWaits
+    }, Memory.layoutSignature(root.snapshot.monitors))
+    root.lastLayout = step.layout
+    root.memoryFrozen = step.frozen
+    root.fixupDone = step.fixupDone
+    root.fixupWaits = step.waits
+
+    if (root.memoryFrozen) restoreSettle.restart()
+    else root.recordMemory()
+  }
+
+  // One bar writes the memory and runs the fix-up: the one on the first
+  // connected screen by connector name. Every bar can tell from its own
+  // snapshot, so when that screen goes, the next one takes over.
+  function isLeader() {
+    if (!root.monitor || root.snapshot.monitors.length === 0) return false
+    var names = root.snapshot.monitors.map(function(screen) { return screen.name }).sort()
+    return names[0] === String(root.monitor.name)
+  }
+
+  function recordMemory() {
+    if (!root.memoryLoaded || !root.blocksLoaded || !root.isLeader()) return
+    var next = Memory.record(root.memory, root.snapshot, root.blocks, root.session)
+    var text = Memory.serialize(next)
+    if (text === Memory.serialize(root.memory)) return
+    root.memory = next
+    if (root.memoryPath !== "") memoryFile.setText(text)
+  }
+
+  // Once a hotplug has settled, lets the memory take what you do again.
+  Timer {
+    id: restoreSettle
+    interval: 400
+    onTriggered: root.fixup()
+  }
+
+  function fixup() {
+    if (!root.memoryFrozen || root.fixupDone) return
+    root.fixupDone = true
+    // The memory thaws on the next snapshot of the same screens.
+    truthDefer.restart()
+  }
 
   // ----------------------------------------------------------------- layout
 
