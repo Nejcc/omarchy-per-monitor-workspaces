@@ -406,4 +406,45 @@ TestCase {
     compare(Memory.plan(memory([1, 1], {}), twins, twinBlocks).moves,
       [{ monitor: "DP-2", workspace: "Twin@DP-2:1", exists: true }])
   }
+
+  // ---------------------------------------------------------------- batch
+
+  function luaString(text) {
+    return "\"" + text + "\""
+  }
+
+  function luaSelector(name) {
+    return "SEL(\"" + name + "\")"
+  }
+
+  // Switching to the workspace a screen already shows is, with Hyprland's
+  // binds:workspace_back_and_forth, a switch to the previous one. By the end
+  // of the batch the remembered workspace is always showing, so the batch has
+  // to end on the screen, and never switch to that workspace a second time.
+  function test_fixupLua_ends_by_focusing_the_screen() {
+    var lua = Memory.fixupLua({
+      moves: [{ monitor: "DP-1", workspace: "P27:1", exists: true },
+              { monitor: "DP-6", workspace: "U27:2", exists: true }],
+      focus: { monitor: "DP-6", workspace: "U27:2" },
+      idle: false
+    }, luaString, luaSelector)
+    verify(/hl\.dispatch\(hl\.dsp\.focus\(\{ monitor = "DP-6" \}\)\);?$/.test(lua.trim()), lua)
+    compare(lua.split("workspace = \"name:U27:2\"").length - 1, 1)
+  }
+
+  function test_fixupLua_puts_focus_back_without_switching_a_workspace() {
+    var lua = Memory.fixupLua({
+      moves: [], focus: { monitor: "DP-6", workspace: "U27:2" }, idle: false
+    }, luaString, luaSelector)
+    compare(lua.indexOf("workspace ="), -1)
+    verify(lua.indexOf("monitor = \"DP-6\"") !== -1, lua)
+  }
+
+  function test_fixupLua_creates_a_missing_slot_and_hands_focus_back() {
+    var lua = Memory.fixupLua({
+      moves: [{ monitor: "eDP-1", workspace: "BOE:1", exists: false }], focus: null, idle: false
+    }, luaString, luaSelector)
+    verify(lua.indexOf("monitor = \"eDP-1\"") < lua.indexOf("workspace = SEL(\"BOE:1\")"), lua)
+    verify(/if origin then hl\.dispatch\(hl\.dsp\.focus\(\{ monitor = origin\.name \}\)\) end$/.test(lua), lua)
+  }
 }

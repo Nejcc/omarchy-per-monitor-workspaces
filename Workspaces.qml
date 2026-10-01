@@ -1042,26 +1042,9 @@ BarWidget {
     truthDefer.restart()
   }
 
-  // The fix-up as one snippet, so the order holds: every screen onto its
-  // target, then focus last -- onto the remembered workspace, or back where
-  // it was when there is none. A slot that has to be created goes through the
-  // Lua half's selector, so it gets its proper id, as a click on its dot does.
+  // The fix-up as one snippet; see fixupLua() in memory.js.
   function fixupLua(plan) {
-    var body = "local origin = hl.get_active_monitor(); "
-    for (var i = 0; i < plan.moves.length; i++) {
-      var move = plan.moves[i]
-      body += "hl.dispatch(hl.dsp.focus({ monitor = " + root.quoteLua(move.monitor) + " })); "
-        + "hl.dispatch(hl.dsp.focus({ workspace = "
-        + (move.exists ? root.quoteLua("name:" + move.workspace) : root.selectorLua(move.workspace))
-        + " })); "
-    }
-    if (plan.focus) {
-      body += "hl.dispatch(hl.dsp.focus({ monitor = " + root.quoteLua(plan.focus.monitor) + " })); "
-        + "hl.dispatch(hl.dsp.focus({ workspace = " + root.quoteLua("name:" + plan.focus.workspace) + " }));"
-    } else {
-      body += "if origin then hl.dispatch(hl.dsp.focus({ monitor = origin.name })) end"
-    }
-    return body
+    return Memory.fixupLua(plan, root.quoteLua, root.selectorLua)
   }
 
   // ----------------------------------------------------------------- layout

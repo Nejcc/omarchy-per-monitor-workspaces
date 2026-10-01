@@ -343,3 +343,31 @@ function plan(memory, snapshot, blocks) {
     || (focusedNow !== null && focusedNow.name === focus.monitor && focusedNow.active === focus.workspace))
   return { moves: moves, focus: focus, idle: idle }
 }
+
+// ----------------------------------------------------------------- batch
+
+// The fix-up as one Lua snippet, so the order holds: every screen onto its
+// target, then focus last -- onto the screen holding the remembered workspace,
+// or back where it was when there is none. The screen, not the workspace: by
+// then the workspace is showing there (plan()'s first rule), and switching to
+// the workspace a screen already shows is, with Hyprland's
+// binds:workspace_back_and_forth, a switch to the previous one. `quote` turns
+// a string into a Lua string literal; `selector` gives the Lua expression for
+// a slot that has to be created, so it gets its proper id, as a click on its
+// dot does.
+function fixupLua(plan, quote, selector) {
+  var body = "local origin = hl.get_active_monitor(); "
+  for (var i = 0; i < plan.moves.length; i++) {
+    var move = plan.moves[i]
+    body += "hl.dispatch(hl.dsp.focus({ monitor = " + quote(move.monitor) + " })); "
+      + "hl.dispatch(hl.dsp.focus({ workspace = "
+      + (move.exists ? quote("name:" + move.workspace) : selector(move.workspace))
+      + " })); "
+  }
+  if (plan.focus) {
+    body += "hl.dispatch(hl.dsp.focus({ monitor = " + quote(plan.focus.monitor) + " }))"
+  } else {
+    body += "if origin then hl.dispatch(hl.dsp.focus({ monitor = origin.name })) end"
+  }
+  return body
+}
