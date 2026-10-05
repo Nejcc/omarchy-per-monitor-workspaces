@@ -405,13 +405,21 @@ BarWidget {
       items.push({ name: name, label: String(slot), tooltip: "", parked: false })
     }
 
+    // Workspaces of a screen that has just gone, which absorb() is about to
+    // take in. Hyprland moves them here at once, the settle renames them a
+    // second later; drawn as parked meanwhile, they flash a glyph and then
+    // turn into numbers. Left out instead, they simply appear numbered.
+    var pending = ({})
+    var guests = root.guestsToAbsorb()
+    for (var g = 0; g < guests.length; g++) pending[guests[g].workspace.name] = true
+
     var parked = []
     var values = root.workspaces
     var here = String(root.monitor ? root.monitor.name : "")
     for (var i = 0; i < values.length; i++) {
       var workspace = values[i]
       var workspaceName = workspace.name
-      if (workspace.monitor !== here) continue
+      if (workspace.monitor !== here || pending[workspaceName]) continue
       // hyprctl reports special workspaces in the same list, and the name is
       // the seam. The Lua half uses workspace.special for the same cut.
       if (own[Memory.baseName(workspaceName)] || workspaceName.indexOf("special:") === 0) continue
