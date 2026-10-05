@@ -16,6 +16,12 @@ function baseName(name) {
   return String(name).replace(/#\d+\.\d+$/, "")
 }
 
+// A guest's name: where it lives now, then the trailer naming where it came
+// from. Mirrors names.guest.
+function guestName(key, slot, originBlock, originSlot) {
+  return key + ":" + slot + "#" + originBlock + "." + originSlot
+}
+
 function guestOrigin(name) {
   var match = String(name).match(/#(\d+)\.(\d+)$/)
   return match ? { block: Number(match[1]), slot: Number(match[2]) } : null

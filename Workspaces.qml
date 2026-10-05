@@ -195,29 +195,15 @@ BarWidget {
   }
 
   // The naming grammar lives in memory.js, which mirrors hypr/names.lua.
-  function baseName(name) {
-    return Memory.baseName(name)
-  }
 
-  function guestOrigin(name) {
-    return Memory.guestOrigin(name)
-  }
-
-  // A valid slot number, or 0; see memory.js.
-  function parseSlot(text) {
-    return Memory.parseSlot(text)
-  }
-
-  // The same key the Lua half builds, for any screen rather than just this
-  // one. `prefix` is this screen's; absorption needs every connected screen's
-  // to tell a guest from a workspace whose screen is merely elsewhere.
-  function keyForMonitor(monitorName) {
+  // The key of every connected screen, as the Lua half builds it. `prefix` is
+  // this screen's; absorption needs every connected screen's to tell a guest
+  // from a workspace whose screen is merely elsewhere.
+  readonly property var connectedKeys: {
+    var keys = ({})
     var monitors = Hyprland.monitors.values
-    var self = null
-    for (var i = 0; i < monitors.length; i++) {
-      if (String(monitors[i].name) === String(monitorName)) { self = monitors[i]; break }
-    }
-    return self ? Memory.monitorKey(self, monitors) : ""
+    for (var i = 0; i < monitors.length; i++) keys[Memory.monitorKey(monitors[i], monitors)] = true
+    return keys
   }
 
   // Slot number -> workspace, for the screen with this key. A guest counts as
@@ -226,12 +212,8 @@ BarWidget {
     var taken = ({})
     if (key === "") return taken
     for (var i = 0; i < root.workspaces.length; i++) {
-      var workspace = root.workspaces[i]
-      var base = root.baseName(workspace.name)
-      var cut = base.lastIndexOf(":")
-      if (cut <= 0 || base.substring(0, cut) !== key) continue
-      var slot = root.parseSlot(base.substring(cut + 1))
-      if (slot > 0) taken[slot] = workspace
+      var parts = Memory.splitSlot(root.workspaces[i].name)
+      if (parts && parts.key === key) taken[parts.slot] = root.workspaces[i]
     }
     return taken
   }
@@ -250,11 +232,10 @@ BarWidget {
   // needs. Every bar computes it from the same snapshot, so they all publish
   // the same number and none fight.
   readonly property int globalCount: {
-    var monitors = Hyprland.monitors.values
     var highest = root.slotCount
-    for (var i = 0; i < monitors.length; i++) {
-      var taken = root.occupiedSlots(root.keyForMonitor(monitors[i].name))
-      for (var slot in taken) highest = Math.max(highest, Number(slot))
+    for (var i = 0; i < root.workspaces.length; i++) {
+      var parts = Memory.splitSlot(root.workspaces[i].name)
+      if (parts && root.connectedKeys[parts.key]) highest = Math.max(highest, parts.slot)
     }
     return highest
   }
@@ -367,14 +348,18 @@ BarWidget {
     "configreloaded": true
   })
 
+  // A screen coming or going, which also starts the adoption settle.
+  readonly property var monitorEvents: ({
+    "monitoradded": true, "monitoraddedv2": true,
+    "monitorremoved": true, "monitorremovedv2": true
+  })
+
   Connections {
     target: Hyprland
 
     function onRawEvent(event) {
       if (root.truthEvents[event.name]) truthDefer.restart()
-      if (event.name === "monitorremoved" || event.name === "monitorremovedv2"
-        || event.name === "monitoradded" || event.name === "monitoraddedv2")
-        adoptSettle.restart()
+      if (root.monitorEvents[event.name]) adoptSettle.restart()
     }
   }
 
@@ -387,7 +372,7 @@ BarWidget {
       if (values[i].name === name) return values[i]
     }
     for (var j = 0; j < values.length; j++) {
-      if (root.baseName(values[j].name) === name) return values[j]
+      if (Memory.baseName(values[j].name) === name) return values[j]
     }
 
     return null
@@ -429,7 +414,7 @@ BarWidget {
       if (workspace.monitor !== here) continue
       // hyprctl reports special workspaces in the same list, and the name is
       // the seam. The Lua half uses workspace.special for the same cut.
-      if (own[root.baseName(workspaceName)] || workspaceName.indexOf("special:") === 0) continue
+      if (own[Memory.baseName(workspaceName)] || workspaceName.indexOf("special:") === 0) continue
       parked.push(workspace)
     }
     // By screen, then by slot as a number: sorted as text, ":10" would come
@@ -683,8 +668,8 @@ BarWidget {
     var ring = root.entries
     if (ring.length < 2) return
 
-    var active = root.baseName(root.activeHere())
-    var index = Math.max(0, ring.map(function(entry) { return root.baseName(entry.name) }).indexOf(active))
+    var active = Memory.baseName(root.activeHere())
+    var index = Math.max(0, ring.map(function(entry) { return Memory.baseName(entry.name) }).indexOf(active))
 
     root.focusWorkspace(ring[((index + step) % ring.length + ring.length) % ring.length].name)
   }
@@ -706,13 +691,6 @@ BarWidget {
   // This lives in the widget because Quickshell rides Hyprland's IPC socket,
   // which announces a returning screen reliably. One instance per screen, each
   // minding its own workspaces, so there is nothing to coordinate here.
-
-  // Slots promised earlier in this same settle tick. reclaimGuests() and
-  // absorb() both hand out slots on this screen from one unrefreshed snapshot,
-  // so without this the second would give away a slot the first has already
-  // spoken for -- two workspaces renamed to one name, and two ids colliding on
-  // the next rehome.
-  property var claimedThisTick: ({})
 
   // The workspace this bar's screen is showing.
   function activeHere() {
@@ -743,7 +721,7 @@ BarWidget {
       var workspace = root.workspaceByName(root.slotName(slot))
       if (workspace === null || workspace.monitor === "" || workspace.monitor === here) continue
 
-      var origin = root.guestOrigin(workspace.name)
+      var origin = Memory.guestOrigin(workspace.name)
       if (origin && root.blockConnected(origin.block)) continue
       names.push(workspace.name)
     }
@@ -752,9 +730,8 @@ BarWidget {
 
   // Whether the screen holding this id block is connected.
   function blockConnected(block) {
-    var monitors = Hyprland.monitors.values
-    for (var i = 0; i < monitors.length; i++) {
-      if (root.blocks[root.keyForMonitor(monitors[i].name)] === block) return true
+    for (var key in root.connectedKeys) {
+      if (root.blocks[key] === block) return true
     }
     return false
   }
@@ -791,33 +768,23 @@ BarWidget {
     var here = String(root.monitor ? root.monitor.name : "")
     if (here === "" || root.prefix === "") return []
 
-    var connected = ({})
-    var monitors = Hyprland.monitors.values
-    for (var m = 0; m < monitors.length; m++) connected[root.keyForMonitor(monitors[m].name)] = true
-
     var found = []
     for (var i = 0; i < root.workspaces.length; i++) {
       var workspace = root.workspaces[i]
-      if (workspace.monitor !== here) continue
-
-      var base = root.baseName(workspace.name)
-      if (base.indexOf("special:") === 0) continue
-      var cut = base.lastIndexOf(":")
-      if (cut <= 0) continue
-      var key = base.substring(0, cut)
-      var slot = root.parseSlot(base.substring(cut + 1))
-      if (!(slot > 0) || connected[key]) continue
+      if (workspace.monitor !== here || workspace.name.indexOf("special:") === 0) continue
+      var parts = Memory.splitSlot(workspace.name)
+      if (!parts || root.connectedKeys[parts.key]) continue
 
       // Its existing trailer wins: a guest whose host screen has now gone in
       // turn still belongs to the screen it started on, not to the one in the
       // middle. If that screen is back, its reclaimGuests sends the guest
       // home; renaming it here first would leave reclaim naming nothing.
-      var origin = root.guestOrigin(workspace.name)
+      var origin = Memory.guestOrigin(workspace.name)
       if (origin && root.blockConnected(origin.block)) continue
       if (!origin) {
-        var block = root.blocks[key]
+        var block = root.blocks[parts.key]
         if (!block) continue
-        origin = { block: block, slot: slot }
+        origin = { block: block, slot: parts.slot }
       }
       found.push({ workspace: workspace, origin: origin })
     }
@@ -835,27 +802,24 @@ BarWidget {
   // they were renamed into their host's scheme when they were taken in, so
   // `strandedSlots` -- which looks for workspaces still carrying this screen's
   // name -- cannot see them. Two mechanisms, disjoint by construction.
-  function reclaimGuests() {
+  //
+  // `taken` is this screen's slots in use, slot -> anything truthy. The slots
+  // handed out here are added to it, so absorb() after it cannot give one away
+  // twice from the same unrefreshed snapshot.
+  function reclaimGuests(taken) {
     if (root.prefix === "" || root.myBlock === 0 || !root.monitor) return
 
     var mine = []
     for (var i = 0; i < root.workspaces.length; i++) {
       var workspace = root.workspaces[i]
-      var base = root.baseName(workspace.name)
-      if (base.indexOf("special:") === 0) continue
-      var cut = base.lastIndexOf(":")
-      if (cut <= 0) continue
-      if (!(root.parseSlot(base.substring(cut + 1)) > 0)) continue
+      if (workspace.name.indexOf("special:") === 0 || !Memory.splitSlot(workspace.name)) continue
 
-      var origin = root.guestOrigin(workspace.name)
+      var origin = Memory.guestOrigin(workspace.name)
       if (origin && origin.block === root.myBlock) mine.push({ workspace: workspace, origin: origin })
     }
     if (mine.length === 0) return
 
     mine.sort(function(left, right) { return left.origin.slot - right.origin.slot })
-
-    var taken = root.occupiedSlots(root.prefix)
-    for (var claimed in root.claimedThisTick) taken[claimed] = true
 
     // Every guest whose own slot is free claims it first. Only then do the
     // displaced ones look for the nearest free slot, so one of them never
@@ -882,14 +846,15 @@ BarWidget {
     }
 
     var body = ""
-    for (var k = 0; k < mine.length; k++) {
-      body += "pmw.relocate(" + root.quoteLua(mine[k].workspace.name) + ", "
-        + root.quoteLua(root.slotName(targets[k])) + ", "
-        + root.quoteLua(String(root.monitor.name)) + "); "
-      root.claimedThisTick[targets[k]] = true
-    }
-
+    for (var k = 0; k < mine.length; k++)
+      body += root.relocateLua(mine[k].workspace.name, root.slotName(targets[k]))
     root.runRelocations(body)
+  }
+
+  // One move through the Lua half's `relocate`, onto this screen.
+  function relocateLua(from, to) {
+    return "pmw.relocate(" + root.quoteLua(from) + ", " + root.quoteLua(to) + ", "
+      + root.quoteLua(String(root.monitor.name)) + "); "
   }
 
   // Moves that go through the Lua half's `relocate`, which knows the ids and
@@ -901,30 +866,23 @@ BarWidget {
       + "if not (pmw and pmw.relocate) then return end; " + body)
   }
 
-  function absorb() {
+  // `taken` as for reclaimGuests(), which has already added its own.
+  function absorb(taken) {
     var guests = root.guestsToAbsorb()
     if (guests.length === 0) return
 
     // Append after the last slot in use, so the part of the bar you already
     // know is untouched.
-    var taken = root.occupiedSlots(root.prefix)
-    for (var claimed in root.claimedThisTick) taken[claimed] = true
     var next = 0
     for (var slot in taken) next = Math.max(next, Number(slot))
-    next = next + 1
 
     var body = ""
     for (var i = 0; i < guests.length; i++) {
-      while (taken[next]) next++
       var guest = guests[i]
-      var to = root.slotName(next) + "#" + guest.origin.block + "." + guest.origin.slot
-      body += "pmw.relocate(" + root.quoteLua(guest.workspace.name) + ", "
-        + root.quoteLua(to) + ", " + root.quoteLua(String(root.monitor.name)) + "); "
-      taken[next] = true
-      root.claimedThisTick[next] = true
       next++
+      body += root.relocateLua(guest.workspace.name,
+        Memory.guestName(root.prefix, next, guest.origin.block, guest.origin.slot))
     }
-
     root.runRelocations(body)
   }
 
@@ -934,10 +892,12 @@ BarWidget {
     id: adoptSettle
     interval: 700
     onTriggered: {
-      root.claimedThisTick = ({})
-      root.reclaimGuests()
+      // Built once, from one snapshot: reclaim and absorb both hand out slots
+      // on this screen, and absorb must see what reclaim has promised.
+      var taken = root.occupiedSlots(root.prefix)
+      root.reclaimGuests(taken)
       root.adopt()
-      root.absorb()
+      root.absorb(taken)
       // The fix-up waits for this settle's work to show; see fixup().
       if (root.memoryFrozen) restoreSettle.restart()
     }
@@ -1063,15 +1023,10 @@ BarWidget {
 
     var plan = Memory.plan(root.memory, root.snapshot, root.blocks)
     root.fixupDone = true
-    if (!plan.idle) root.runLua(root.fixupLua(plan))
+    if (!plan.idle) root.runLua(Memory.fixupLua(plan, root.quoteLua, root.selectorLua))
     // The memory thaws on the next snapshot of the same screens, and a fix-up
     // with nothing to do brings no events of its own to cause one.
     truthDefer.restart()
-  }
-
-  // The fix-up as one snippet; see fixupLua() in memory.js.
-  function fixupLua(plan) {
-    return Memory.fixupLua(plan, root.quoteLua, root.selectorLua)
   }
 
   // ----------------------------------------------------------------- layout
@@ -1099,7 +1054,7 @@ BarWidget {
         readonly property bool occupied: workspace !== null && workspace.windows > 0
         // This monitor's active slot, not the globally focused one, so every bar
         // reports where its own screen is sitting.
-        readonly property bool focused: root.baseName(root.activeHere()) === root.baseName(modelData.name)
+        readonly property bool focused: Memory.baseName(root.activeHere()) === Memory.baseName(modelData.name)
         // The one workspace Hyprland has focused, anywhere. Every bar has a
         // `focused` slot of its own; exactly one of them is also this, and it
         // is the one SUPER+N acts on.
