@@ -185,8 +185,9 @@ local blocks = read_state(blocks_path)
 -- The id a slot name should have. `allocate` gives an unseen screen its block;
 -- without it, a key that has none yet has no id either.
 local function slot_id(name, allocate)
+  -- Range first, so a name with no id to give never costs a key a block.
   local key, slot = names.split(name)
-  if not key then return nil end
+  if not key or slot < 1 or slot >= names.STRIDE then return nil end
 
   local block = tonumber(blocks[key])
   if not block then
@@ -432,12 +433,19 @@ local function monitor_ring()
   -- Not every slot up to `count`: that is the most any screen needs, and
   -- another screen's guests would put empty slots in this ring the bar here
   -- does not show.
+  -- One read of the workspaces, indexed by the slot each lives in, trailer
+  -- stripped; the first wins, as find_workspace would have it.
+  local workspaces = hl.get_workspaces()
+  local by_slot = {}
+  for _, workspace in ipairs(workspaces) do
+    local base = names.strip(workspace.name)
+    if not by_slot[base] then by_slot[base] = workspace end
+  end
+
   local key = monitor_key(monitor)
   local ring, own = {}, {}
   for slot = 1, actions.count do
-    local live = find_workspace(function(workspace)
-      return names.matches(workspace.name, key, slot)
-    end)
+    local live = by_slot[names.slot(key, slot)]
     if live or slot <= actions.slots then
       ring[#ring + 1] = live and live.name or names.slot(key, slot)
       own[ring[#ring]] = true
@@ -445,7 +453,7 @@ local function monitor_ring()
   end
 
   local parked = {}
-  for _, workspace in ipairs(hl.get_workspaces()) do
+  for _, workspace in ipairs(workspaces) do
     if not workspace.special and workspace.monitor and workspace.monitor.id == monitor.id
       and not own[workspace.name] then
       parked[#parked + 1] = workspace

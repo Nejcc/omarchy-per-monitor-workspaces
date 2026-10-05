@@ -64,6 +64,12 @@ TestCase {
     compare(Memory.baseName("a#b:5"), "a#b:5")
   }
 
+  function test_guestName_round_trips_through_the_parsers() {
+    compare(Memory.guestName("BOE", 11, 2, 2), "BOE:11#2.2")
+    compare(Memory.splitSlot(Memory.guestName("BOE", 11, 2, 2)), { key: "BOE", slot: 11 })
+    compare(Memory.guestOrigin(Memory.guestName("BOE", 11, 2, 2)), { block: 2, slot: 2 })
+  }
+
   function test_guestOrigin_reads_the_trailer() {
     compare(Memory.guestOrigin("BOE:5#2.2"), { block: 2, slot: 2 })
     compare(Memory.guestOrigin("BOE:5"), null)
