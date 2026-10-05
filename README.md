@@ -195,18 +195,33 @@ end)
 
 ## Unplugging a screen
 
-Hyprland parks a disconnected screen's workspaces on a surviving one. The bar
-shows them after your numbered slots, as a display glyph rather than a number —
-the number they carry belongs to the screen they came from, and printing it
-would put a second "4" after this screen's "5". Hover to see where it came from,
-and `SUPER + TAB` reaches them, so nothing is stranded.
+Hyprland parks a disconnected screen's workspaces on a surviving one. They do
+not sit there as strangers: each one takes a slot on that screen, appended
+after the last slot in use, and becomes an ordinary numbered workspace there —
+same dots, same number keys. The slot count grows to fit them and shrinks back
+when they leave, without touching your `count` setting.
 
-![The bar showing workspaces 1 to 5 followed by an orange display icon](docs/parked.png)
+There are ten number keys and no more, so a workspace appended past the tenth
+slot has no key of its own. It is still an ordinary slot: `SUPER+TAB`, the
+scroll wheel and a click all reach it.
 
-Plug the screen back in and its workspaces come home with their windows. Left to
-itself Hyprland hands a returning screen a fresh global workspace, and a dock can
-put the same panel on a different connector than last time, which leaves two
-screens showing each other's workspaces. The widget sorts both out.
+Plug the screen back in and they go home — to their own slot where it is still
+free, to the nearest free one where it is not. A workspace you deliberately
+moved while the screen was away, by swapping it to another screen, stays where
+you put it — and the screen it left keeps the extra dot for it, since that
+screen's slot count only shrinks back once the workspace empties.
+
+The screens and the focus are put back too. Left to itself Hyprland moves
+focus to the first remaining screen whenever one is unplugged, hands a
+returning screen a fresh global workspace, and a dock can put the same panel
+on a different connector than last time. The widget remembers the workspace
+you were on and what each screen was showing, and once the screens have
+settled it puts them back: focus stays on your workspace — following it onto
+the screen that takes it in, and home again when its screen returns — and
+every screen shows what it showed before. A screen that stayed returns to its
+own last slot when the guest it was showing goes home. The memory lives in
+`~/.local/state/omarchy/mmsbrggr.per-monitor-workspaces.memory.json` and only
+counts for the current session.
 
 Screens are identified by description rather than connector, because `DP-2` and
 `DP-3` can swap on replug. Two identical panels that report no serial describe
