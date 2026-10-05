@@ -185,8 +185,9 @@ local blocks = read_state(blocks_path)
 -- The id a slot name should have. `allocate` gives an unseen screen its block;
 -- without it, a key that has none yet has no id either.
 local function slot_id(name, allocate)
+  -- Range first, so a name with no id to give never costs a key a block.
   local key, slot = names.split(name)
-  if not key then return nil end
+  if not key or slot < 1 or slot >= names.STRIDE then return nil end
 
   local block = tonumber(blocks[key])
   if not block then

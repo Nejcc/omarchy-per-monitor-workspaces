@@ -96,9 +96,12 @@ BarWidget {
     // Confirm on the way out rather than on the way in: a setText issued before
     // the view has settled is dropped silently, with neither signal, so the
     // count is only considered published once the write actually lands.
+    // What was written, not what the counts are by now: the global count moves
+    // during a hotplug, and taking the new one here would mark it published
+    // when the file still holds the old.
     onSaved: {
-      root.publishedCount = root.globalCount
-      root.publishedSlots = root.slotCount
+      root.publishedCount = root.writtenCount
+      root.publishedSlots = root.writtenSlots
       root.pushCount()
     }
     onSaveFailed: publishDefer.restart()
@@ -108,15 +111,19 @@ BarWidget {
   // Confirmed on the way out rather than assumed on the way in.
   property int publishedCount: 0
   property int publishedSlots: 0
+  property int writtenCount: 0
+  property int writtenSlots: 0
 
   // `count` sizes the keys, so it is the most slots any screen needs; `slots`
   // is the setting itself, which sizes each screen's SUPER+TAB ring.
   function publishCount() {
     if (root.configPath === "") return
     if (root.globalCount === root.publishedCount && root.slotCount === root.publishedSlots) return
+    root.writtenCount = root.globalCount
+    root.writtenSlots = root.slotCount
     configFile.setText("-- Written by the Per-monitor Workspaces bar widget.\n"
       + "-- Derived from its `count` setting in shell.json; edit it there.\n"
-      + "return { count = " + root.globalCount + ", slots = " + root.slotCount + " }\n")
+      + "return { count = " + root.writtenCount + ", slots = " + root.writtenSlots + " }\n")
   }
 
   // The file above is only read when Hyprland parses its config, so on its own
@@ -132,7 +139,7 @@ BarWidget {
   // it, and the Lua side drops an unchanged count.
   function pushCount() {
     root.runLua("local pmw = _G.per_monitor_workspaces; "
-      + "if pmw and pmw.set_count then pmw.set_count(" + root.globalCount + ", " + root.slotCount + ") end")
+      + "if pmw and pmw.set_count then pmw.set_count(" + root.publishedCount + ", " + root.publishedSlots + ") end")
   }
 
   // The revision of hypr/actions.lua this widget is written against; see
@@ -371,10 +378,16 @@ BarWidget {
     }
   }
 
+  // The exact name first: a parked entry carries its full name, trailer and
+  // all, and would never equal a base name. Then by slot, so a bare slot name
+  // finds the workspace living there as a guest.
   function workspaceByName(name) {
     var values = root.workspaces
     for (var i = 0; i < values.length; i++) {
-      if (root.baseName(values[i].name) === name) return values[i]
+      if (values[i].name === name) return values[i]
+    }
+    for (var j = 0; j < values.length; j++) {
+      if (root.baseName(values[j].name) === name) return values[j]
     }
 
     return null
@@ -797,8 +810,10 @@ BarWidget {
 
       // Its existing trailer wins: a guest whose host screen has now gone in
       // turn still belongs to the screen it started on, not to the one in the
-      // middle.
+      // middle. If that screen is back, its reclaimGuests sends the guest
+      // home; renaming it here first would leave reclaim naming nothing.
       var origin = root.guestOrigin(workspace.name)
+      if (origin && root.blockConnected(origin.block)) continue
       if (!origin) {
         var block = root.blocks[key]
         if (!block) continue
@@ -841,25 +856,37 @@ BarWidget {
 
     var taken = root.occupiedSlots(root.prefix)
     for (var claimed in root.claimedThisTick) taken[claimed] = true
-    var body = ""
+
+    // Every guest whose own slot is free claims it first. Only then do the
+    // displaced ones look for the nearest free slot, so one of them never
+    // lands on a later guest's own slot and pushes it off in turn.
+    var targets = []
     for (var g = 0; g < mine.length; g++) {
-      var guest = mine[g]
-      var target = guest.origin.slot
-      if (taken[target]) {
-        // Its own slot was taken while it was away. It comes home anyway, to
-        // the nearest free one, and stops being a guest either way. Below
-        // wins a tie, so it stays among the slots you already know.
-        var own = target
-        for (var d = 1; taken[target]; d++) {
-          if (own - d >= 1 && !taken[own - d]) target = own - d
-          else if (!taken[own + d]) target = own + d
-        }
+      var own = mine[g].origin.slot
+      targets[g] = taken[own] ? 0 : own
+      if (targets[g]) taken[own] = true
+    }
+    for (var h = 0; h < mine.length; h++) {
+      if (targets[h]) continue
+      // Its own slot was taken while it was away. It comes home anyway, to
+      // the nearest free one, and stops being a guest either way. Below wins
+      // a tie, so it stays among the slots you already know.
+      var home = mine[h].origin.slot
+      var nearest = home
+      for (var d = 1; taken[nearest]; d++) {
+        if (home - d >= 1 && !taken[home - d]) nearest = home - d
+        else if (!taken[home + d]) nearest = home + d
       }
-      body += "pmw.relocate(" + root.quoteLua(guest.workspace.name) + ", "
-        + root.quoteLua(root.slotName(target)) + ", "
+      targets[h] = nearest
+      taken[nearest] = true
+    }
+
+    var body = ""
+    for (var k = 0; k < mine.length; k++) {
+      body += "pmw.relocate(" + root.quoteLua(mine[k].workspace.name) + ", "
+        + root.quoteLua(root.slotName(targets[k])) + ", "
         + root.quoteLua(String(root.monitor.name)) + "); "
-      taken[target] = true
-      root.claimedThisTick[target] = true
+      root.claimedThisTick[targets[k]] = true
     }
 
     root.runRelocations(body)
