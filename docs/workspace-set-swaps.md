@@ -31,5 +31,5 @@ QT_QPA_PLATFORM=offscreen QT_QPA_PLATFORMTHEME=generic QT_QUICK_BACKEND=software
   /usr/lib/qt6/bin/qmltestrunner -input tests
 ```
 
-The Lua swap checks simulate the compositor. A live two-monitor check is still
-needed to verify native tiling, focus and hotplug behavior before release.
+The Lua swap checks simulate the compositor. Native tiling, focus and
+hotplug behavior were also checked live on two monitors.

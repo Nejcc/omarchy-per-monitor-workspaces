@@ -1,9 +1,9 @@
-# Proposal: optional plugin integrations
+# Plugin integration API
 
-I want Pocket, Motions and per-monitor workspaces to cooperate while keeping
-per-monitor fully usable on its own. This adds a small Lua integration API.
-The core imports no other plugin, adds no required dependencies or keybindings,
-and keeps the upstream plugin ID, install instructions and attribution.
+Other Hyprland Lua plugins can resolve per-monitor workspaces and be notified
+when this plugin moves or swaps them. The API is optional. The core imports no
+other plugin, adds no dependencies or keybindings, and behaves the same when no
+consumer is registered.
 
 Each consumer owns its adapter. There is no plugin discovery service or module
 installation system. The provider exposes capabilities; an installed consumer
@@ -26,12 +26,12 @@ Callbacks receive a separate table mapping old workspace names to final names.
 The provider sends a single batch after a workspace-set swap, a visible swap,
 or a relocation through `relocate` (including the widget's hotplug recovery).
 Scratch names are never published. Configured empty slots are included in a
-set swap, because a Pocket window may remember a home that is currently empty.
+set swap, because a consumer may reference a slot that is currently empty.
 Apply each mapping once; following chained entries would undo a two-way swap.
 
 Notifications describe actions performed through this plugin. Native workspace
 renames made outside it do not emit this callback. This first version does not
-provide a shared QML workspace snapshot or automatically refresh Motions panels.
+provide a shared QML workspace snapshot.
 
 ```lua
 local pmw = per_monitor_workspaces
@@ -45,24 +45,13 @@ if api and api.version == 1 then
 end
 ```
 
-## Pocket and Motions adapters
+## Load order
 
-The accompanying Pocket change keeps its adapter in
-`integrations/per-monitor.lua`. It rewrites saved home tags when a workspace
-moves or swaps. Its special workspaces and terminal behavior stay independent.
-The accompanying Motions change resolves dispatch targets through the versioned
-API, falling back to the older `selector` API or a native name selector.
-
-Load per-monitor before Pocket for automatic attachment. If Pocket loads first,
-add this after both plugin loaders in the Hyprland Lua configuration:
-
-```lua
-if pocket and pocket.connect_workspaces then pocket.connect_workspaces() end
-```
-
-The call is safe when per-monitor is absent or predates this API. Repeat it as
-part of config loading on reload: callbacks belong to the current Lua state.
-Per-monitor never loads or enables Pocket or Motions itself.
+`per_monitor_workspaces` exists once this plugin's Lua has loaded. A consumer
+that loads earlier should register again after both plugins have loaded, for
+example from a function the user calls at the end of their Hyprland Lua
+configuration. Registration is idempotent per ID. Repeat it on every config
+reload: callbacks belong to the current Lua state.
 
 ## Verification
 
@@ -73,7 +62,4 @@ lua tests/swap_sets_test.lua
 ```
 
 Offline checks cover standalone use, registration replacement, removal, callback
-failure isolation, final-name batch delivery and hotplug relocation. Consumer
-repositories cover Pocket with and without the provider, either load order,
-and Motions with the new API, the old API and no provider. A live two-monitor
-Hyprland check remains necessary before release.
+failure isolation, final-name batch delivery and hotplug relocation.

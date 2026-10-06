@@ -258,4 +258,4 @@ Omarchy's built-in workspace widget goes back where this one was. Then remove th
 MIT. The bar widget is derived from Omarchy's built-in workspace widget.
 
 Optional additions: [complete workspace-set swaps](docs/workspace-set-swaps.md).
-Proposal: [optional plugin integrations](docs/plugin-integrations.md).
+Plugin integration API: [docs/plugin-integrations.md](docs/plugin-integrations.md).
