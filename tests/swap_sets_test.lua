@@ -51,6 +51,11 @@ local function fixture(extra, duplicate_description)
     local w = find(args.workspace)
     w.monitor = args.monitor == left.name and left or right
   end end
+  hl.dsp.workspace.swap_monitors = function() return function()
+    local from, to = left.active_workspace, right.active_workspace
+    from.monitor, to.monitor = right, left
+    left.active_workspace, right.active_workspace = to, from
+  end end
   hl.dsp.workspace.change_id = function(args) return function()
     local w = find(args.workspace)
     for _, other in ipairs(workspaces) do assert(other == w or other.id ~= args.id, "id collision") end
@@ -64,8 +69,11 @@ local function fixture(extra, duplicate_description)
     elseif args.monitor then active = args.monitor == left.name and left or right end
   end end
   local env = setmetatable({ hl = hl, os = { getenv = function() return "/mock" end } }, { __index = _G })
+  env._G = env
   env.dofile = function(path)
-    if path:match("/names.lua$") then return assert(loadfile(path, "t", env))() end
+    if path:match("/names.lua$") or path:match("/integrations.lua$") then
+      return assert(loadfile(path, "t", env))()
+    end
     if path:match("%.blocks.lua$") then return blocks end
     if path:match("%.layouts.lua$") then return saved end
     return { count = 5, slots = 5 }
@@ -131,3 +139,26 @@ f = fixture(function(add, _, _, left) add("occupied", 201, left) end)
 f.actions.swap_workspace_sets("r")()
 assert(f.a.name == "Right:1" and f.a.id == 101)
 print("ok: occupied foreign ids remain intact")
+
+f = fixture()
+local remap, completed
+f.actions.integration.register("example.consumer", { workspaces_remapped = function(mapping)
+  remap = mapping
+  completed = f.a.name == "Right:1" and f.a.id == 201 and f.active() == f.right
+end })
+f.actions.swap_workspace_sets("r")()
+assert(completed and remap["Left:1"] == "Right:1" and remap["Right:2"] == "Left:2")
+assert(remap["Left:5"] == "Right:5") -- an adopted home's slot may currently be empty
+assert(not remap["9"] and not remap["Left:8"])
+f.actions.relocate("Right:1", "Left:4", "DP-1")
+assert(remap["Right:1"] == "Left:4")
+print("ok: optional consumer receives final batch and hotplug relocation")
+
+f = fixture()
+f.actions.integration.register("example.consumer", { workspaces_remapped = function(mapping)
+  remap = mapping
+end })
+f.actions.swap_workspaces("r")()
+assert(remap["Left:1"] == "Right:2" and remap["Right:2"] == "Left:1")
+assert(f.a.name == "Right:2" and f.b.name == "Left:1")
+print("ok: existing visible swap emits final names too")

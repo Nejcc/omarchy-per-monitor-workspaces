@@ -164,6 +164,7 @@ end
 -- tests/names_test.lua.
 local here = debug.getinfo(1, "S").source:match("@(.*/)") or ""
 local names = dofile(here .. "names.lua")
+local integrations
 
 -- Slots are numbered workspaces that carry a name, not named workspaces.
 --
@@ -351,6 +352,7 @@ local function relocate(from, to, monitor)
   end
 
   rehome({ workspace.id })
+  if integrations and from ~= to then integrations.notify_remap({ [from] = to }) end
 end
 
 -- Rules already registered this parse. A parse starts from an empty rule set,
@@ -600,6 +602,7 @@ local function swap_workspaces(selector)
 
     -- Follow the windows you just sent over.
     hl.dispatch(hl.dsp.focus({ monitor = monitor.name }))
+    if integrations then integrations.notify_remap({ [here] = there_base, [there] = here_base }) end
   end
 end
 
@@ -683,6 +686,13 @@ local function swap_workspace_sets(selector)
     else
       hl.dispatch(hl.dsp.focus({ monitor = origin.name }))
     end
+    local mapping = {}
+    for slot = 1, math.min(actions.count, names.STRIDE - 1) do
+      mapping[names.slot(here_key, slot)] = names.slot(there_key, slot)
+      mapping[names.slot(there_key, slot)] = names.slot(here_key, slot)
+    end
+    for _, workspace in ipairs(moving) do mapping[workspace.from] = workspace.to end
+    if integrations then integrations.notify_remap(mapping) end
   end
 end
 
@@ -760,6 +770,8 @@ actions.toggle_layout = toggle_layout
 -- widget starts relying on something new in this file. Versions from before
 -- this field existed read as 1.
 actions.version = 3
+integrations = dofile(here .. "integrations.lua")(workspace_selector)
+actions.integration = integrations
 
 -- Also global, so hypr/bindings.lua can find it without a path, and so a
 -- user's own config can reach it after hypr/init.lua has run.

@@ -11,3 +11,4 @@ jobs:
       - run: luac -p hypr/actions.lua
       - run: lua tests/names_test.lua
       - run: lua tests/swap_sets_test.lua
+      - run: lua tests/integrations_test.lua
