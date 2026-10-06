@@ -621,7 +621,9 @@ local function swap_workspace_sets(selector)
     end
 
     local moving, destinations, ids = {}, {}, {}
-    local saved, layouts = read_layouts(), {}
+    -- A layouts file that exists but cannot be read is left alone.
+    local readable = read_layouts()
+    local saved, layouts = readable or {}, {}
     for name, layout in pairs(saved) do layouts[name] = layout end
     local origin_active = origin.active_workspace and origin.active_workspace.name
     local target_active = monitor.active_workspace and monitor.active_workspace.name
@@ -674,7 +676,7 @@ local function swap_workspace_sets(selector)
       local target = destination(name)
       if target then layouts[target], cleared[target] = layout, nil end
     end
-    write_layouts(layouts)
+    if readable then write_layouts(layouts) end
     for name, layout in pairs(layouts) do if destination(name) then apply_layout(name, layout) end end
     -- Rules cannot be removed at runtime, and the API cannot read
     -- general:layout. Fall back to dwindle, the default toggle_layout assumes,
