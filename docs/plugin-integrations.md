@@ -14,7 +14,7 @@ can opt in, and falls back to its ordinary behavior when they are absent.
 `per_monitor_workspaces.integration` provides API version `1`:
 
 * `resolve_workspace(name)` uses the same resolver as `selector(name)`, including
-  guest slots and numeric workspace IDs. Like the existing selector, it may
+  guest slots. A numeric name returns that global workspace id. Otherwise it may
   allocate a block or register a default-name rule. It is not a read-only query.
 * `register(id, module)` attaches a module with a `workspaces_remapped(mapping)`
   callback. Registering the same ID replaces the previous callback.

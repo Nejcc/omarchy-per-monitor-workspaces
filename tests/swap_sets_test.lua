@@ -88,7 +88,7 @@ local function fixture(extra, duplicate_description)
       end,
     }
   end }
-  if extra then extra(add, a, b, left, right) end
+  if extra then extra(add, a, b, left, right, blocks) end
   local actions = assert(loadfile("hypr/actions.lua", "t", env))()
   return { actions = actions, a = a, b = b, hidden = hidden, global = global, third = third,
     special = special, left = left, right = right, lk = lk, rk = rk, add = add,
@@ -162,3 +162,15 @@ f.actions.swap_workspaces("r")()
 assert(remap["Left:1"] == "Right:2" and remap["Right:2"] == "Left:1")
 assert(f.a.name == "Right:2" and f.b.name == "Left:1")
 print("ok: existing visible swap emits final names too")
+
+f = fixture(function(_, _, _, _, _, blocks) blocks.Right = nil end)
+f.actions.swap_workspace_sets("r")()
+assert(f.a.name == "Right:1" and f.a.id == 401 and f.hidden.id == 403)
+assert(f.b.name == "Left:2" and f.b.id == 102)
+print("ok: a screen with no id block gets one before moved slots are rehomed")
+
+f = fixture()
+f.actions.swap_workspace_sets("r")()
+assert(not f.saved()["Right:3"] and not f.saved()["Left:1"] and f.saved()["Right:1"] == "scrolling")
+assert(f.rules["name:Left:1"] == "dwindle" and f.rules["name:Left:5"] == "dwindle")
+print("ok: defaults are not pinned and cleared slots drop their stale rule")

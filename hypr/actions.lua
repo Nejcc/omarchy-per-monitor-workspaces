@@ -656,20 +656,30 @@ local function swap_workspace_sets(selector)
       hl.dispatch(hl.dsp.workspace.move({ workspace = "name:" .. workspace.scratch, monitor = workspace.monitor }))
       hl.dispatch(hl.dsp.workspace.rename({ workspace = "name:" .. workspace.scratch, name = workspace.to }))
     end
+    -- A screen that has only ever shown global workspaces has no id block yet.
+    -- Without one, rehome leaves its new slots on the other screen's ids.
+    slot_id(names.slot(here_key, 1), true)
+    slot_id(names.slot(there_key, 1), true)
     rehome(ids)
 
-    -- Preferences for unused slots travel too. Guest status ends on an
-    -- intentional swap, matching swap_workspaces; their host slot is retained.
-    for name in pairs(saved) do if destination(name) then layouts[name] = nil end end
+    -- Saved preferences travel with their slots, used or not. Only explicit
+    -- choices are saved: pinning every default would make these slots ignore a
+    -- later change to general:layout. Guest status ends on an intentional
+    -- swap, matching swap_workspaces; their host slot is retained.
+    local cleared = {}
+    for name in pairs(saved) do
+      if destination(name) then layouts[name], cleared[name] = nil, true end
+    end
     for name, layout in pairs(saved) do
       local target = destination(name)
-      if target then layouts[target] = layout end
-    end
-    for _, workspace in ipairs(moving) do
-      if workspace.layout and workspace.layout ~= "unknown" then layouts[workspace.to] = workspace.layout end
+      if target then layouts[target], cleared[target] = layout, nil end
     end
     write_layouts(layouts)
     for name, layout in pairs(layouts) do if destination(name) then apply_layout(name, layout) end end
+    -- Rules cannot be removed at runtime, and the API cannot read
+    -- general:layout. Fall back to dwindle, the default toggle_layout assumes,
+    -- until the next config parse drops the stale rule.
+    for name in pairs(cleared) do apply_layout(name, "dwindle") end
 
     -- Show the exchanged active workspace on each screen. Follow the set from
     -- the originating screen, leaving unrelated global/special workspaces alone.

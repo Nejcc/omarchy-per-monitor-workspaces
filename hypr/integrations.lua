@@ -1,7 +1,14 @@
 -- Optional consumers own their adapters; the core never imports another plugin.
-return function(resolve_workspace)
+return function(selector)
   local modules = {}
-  local api = { version = 1, resolve_workspace = resolve_workspace, errors = {} }
+  local api = { version = 1, errors = {} }
+
+  -- Numeric names are Hyprland's global workspaces. Address them by id: the
+  -- selector would return "name:3", which creates a named workspace instead.
+  function api.resolve_workspace(name)
+    if type(name) == "number" or tostring(name):match("^%d+$") then return tostring(name) end
+    return selector(name)
+  end
 
   function api.register(id, module)
     assert(type(id) == "string" and id ~= "", "integration id must be a nonempty string")
